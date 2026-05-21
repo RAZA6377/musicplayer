@@ -73,6 +73,9 @@ fun MainDashboard(viewModel: MusicViewModel) {
     val queueIndex by viewModel.playerManager.queueIndex.collectAsStateWithLifecycle()
     val isShuffle by viewModel.playerManager.isShuffle.collectAsStateWithLifecycle()
     val isRepeat by viewModel.playerManager.isRepeatAll.collectAsStateWithLifecycle()
+    val isRepeatOne by viewModel.playerManager.isRepeatOne.collectAsStateWithLifecycle()
+    val pointA by viewModel.playerManager.pointA.collectAsStateWithLifecycle()
+    val pointB by viewModel.playerManager.pointB.collectAsStateWithLifecycle()
 
     val conversionProgress by viewModel.conversionProgress.collectAsStateWithLifecycle()
     val isConverting by viewModel.isConverting.collectAsStateWithLifecycle()
@@ -82,12 +85,21 @@ fun MainDashboard(viewModel: MusicViewModel) {
     val lastSyncTime by viewModel.syncManager.lastSyncTime.collectAsStateWithLifecycle()
     val driveAuthToken by viewModel.driveAuthToken.collectAsStateWithLifecycle()
 
+    // Scanning & Loader features
+    val isLoadingData by viewModel.isLoadingData.collectAsStateWithLifecycle()
+    val isScanning by viewModel.isScanning.collectAsStateWithLifecycle()
+    val newSongsAddedCount by viewModel.newSongsAddedCount.collectAsStateWithLifecycle()
+    val excludedFolders by viewModel.excludedFolders.collectAsStateWithLifecycle()
+
     // Navigation and UI state
     var selectedTab by remember { mutableStateOf(0) } // 0: Tracks, 1: Playlists, 2: Converter, 3: Sync
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var playlistNameInput by remember { mutableStateOf("") }
     var showAddToPlaylistSheet by remember { mutableStateOf<SongEntity?>(null) }
+    var showExcludeDialog by remember { mutableStateOf(false) }
+    var showRenameSongDialog by remember { mutableStateOf<SongEntity?>(null) }
+    var renameSongInput by remember { mutableStateOf("") }
 
     // Activity result launcher for audio files import
     val audioPickerLauncher = rememberLauncherForActivityResult(
@@ -235,7 +247,12 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 onAddToQueue = { song ->
                                     viewModel.playerManager.addToQueueEnd(song)
                                 },
-                                listToUse = playlistSongs
+                                listToUse = playlistSongs,
+                                onMoveUp = { viewModel.movePlaylistSongUp(it) },
+                                onMoveDown = { viewModel.movePlaylistSongDown(it) },
+                                onSortByTitle = { viewModel.sortPlaylistByTitle() },
+                                onSortByDate = { viewModel.sortPlaylistByDate() },
+                                onSortBySize = { viewModel.sortPlaylistBySize() }
                             )
                         }
                         selectedTab == 0 -> {
@@ -250,7 +267,13 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 onAddToPlaylist = { song -> showAddToPlaylistSheet = song },
                                 onDeleteClick = { song -> viewModel.deleteSong(song) },
                                 onAddToQueueNext = { song -> viewModel.playerManager.addToQueueNext(song) },
-                                onAddToQueueEnd = { song -> viewModel.playerManager.addToQueueEnd(song) }
+                                onAddToQueueEnd = { song -> viewModel.playerManager.addToQueueEnd(song) },
+                                onTriggerScan = { viewModel.triggerManualScan() },
+                                onManageExclusionsClick = { showExcludeDialog = true },
+                                onRenameClick = { song ->
+                                    showRenameSongDialog = song
+                                    renameSongInput = song.title
+                                }
                             )
                         }
                         selectedTab == 1 -> {
@@ -303,6 +326,9 @@ fun MainDashboard(viewModel: MusicViewModel) {
                         queueIndex = queueIndex,
                         isShuffle = isShuffle,
                         isRepeat = isRepeat,
+                        isRepeatOne = isRepeatOne,
+                        pointA = pointA,
+                        pointB = pointB,
                         onCloseClick = { isPlayerExpanded = false },
                         onPlayPauseClick = { viewModel.playOrPause() },
                         onNextClick = { viewModel.skipToNext() },
@@ -315,11 +341,316 @@ fun MainDashboard(viewModel: MusicViewModel) {
                         onQueueReorder = { from, to -> viewModel.playerManager.reorderQueue(from, to) },
                         onQueueRemove = { idx -> viewModel.playerManager.removeFromQueue(idx) },
                         onToggleShuffle = { viewModel.playerManager.toggleShuffle() },
-                        onToggleRepeat = { viewModel.playerManager.toggleRepeat() }
+                        onToggleRepeat = { viewModel.playerManager.toggleRepeat() },
+                        onToggleRepeatOne = { viewModel.playerManager.toggleRepeatOne() },
+                        onSetPointA = { viewModel.playerManager.setPointA(it) },
+                        onSetPointB = { viewModel.playerManager.setPointB(it) }
                     )
                 }
             }
         }
+    }
+
+    // Dialog: Neon Media Scan notifications
+    if (newSongsAddedCount != null && newSongsAddedCount!! > 0) {
+        val count = newSongsAddedCount!!
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissNewSongsDialog() },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Bolt,
+                        contentDescription = "Sync",
+                        tint = ElectricCyan,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "NEON MEDIA SCAN",
+                        color = ElectricCyan,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 16.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Device folders scanned under active filter list.",
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(ElectricCyan.copy(alpha = 0.12f))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = "🔥 Identified $count new offline tracks successfully loaded into library!",
+                            color = ElectricCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.dismissNewSongsDialog() },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
+                ) {
+                    Text("DONE", color = Color.Black, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                }
+            },
+            containerColor = DeepObsidian
+        )
+    }
+
+    // Dialog: Rename song
+    if (showRenameSongDialog != null) {
+        val songToRename = showRenameSongDialog!!
+        AlertDialog(
+            onDismissRequest = { showRenameSongDialog = null },
+            title = { Text("Rename Song Title", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = renameSongInput,
+                    onValueChange = { renameSongInput = it },
+                    label = { Text("Display Title", color = ElectricCyan) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ElectricCyan,
+                        focusedLabelColor = ElectricCyan,
+                        cursorColor = ElectricCyan
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (renameSongInput.isNotBlank()) {
+                            viewModel.renameSong(songToRename, renameSongInput)
+                            showRenameSongDialog = null
+                            renameSongInput = ""
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
+                ) {
+                    Text("RENAME", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameSongDialog = null }) {
+                    Text("Cancel", color = AudioMutedText)
+                }
+            },
+            containerColor = DeepObsidian
+        )
+    }
+
+    // Dynamic Full Screen Neon Equalizer Loader Overlay
+    if (isLoadingData) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(DeepObsidian, Color(0xFF070A0F))))
+                .pointerInput(Unit) {},
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                val infiniteTransition = rememberInfiniteTransition(label = "loader_anim")
+                val rotation by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(2200, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "rotation"
+                )
+                val pulseScale by infiniteTransition.animateFloat(
+                    initialValue = 0.92f,
+                    targetValue = 1.08f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1100, easing = EaseInOutSine),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulse"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize().rotate(rotation)) {
+                        val numBars = 12
+                        val center = size / 2f
+                        val outerRadius = size.minDimension / 2.4f
+                        val innerRadius = size.minDimension / 4.5f
+                        for (i in 0 until numBars) {
+                            val angleRad = Math.toRadians((i * (360f / numBars)).toDouble())
+                            val startX = (center.width + innerRadius * Math.sin(angleRad)).toFloat()
+                            val startY = (center.height + innerRadius * Math.sin(angleRad)).toFloat()
+                            val endX = (center.width + outerRadius * Math.cos(angleRad)).toFloat()
+                            val endY = (center.height + outerRadius * Math.sin(angleRad)).toFloat()
+                            
+                            drawLine(
+                                color = if (i % 2 == 0) ElectricCyan else NeonPink,
+                                start = androidx.compose.ui.geometry.Offset(startX, startY),
+                                end = androidx.compose.ui.geometry.Offset(endX, endY),
+                                strokeWidth = 4.dp.toPx(),
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Text(
+                    text = "DYNAMIC PLAYER",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Black,
+                        color = ElectricCyan,
+                        letterSpacing = 4.sp
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = if (isScanning) "SCANNING STORAGE DIRECTORIES..." else "TUNING NEON AUDIO SYSTEM...",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = AudioMutedText,
+                        letterSpacing = 1.sp
+                    )
+                )
+            }
+        }
+    }
+
+    // Dialog: Manage Excluded Folders list
+    if (showExcludeDialog) {
+        var newFolderInput by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showExcludeDialog = false },
+            title = {
+                Text(
+                    "EXCLUDED STORAGE FOLDERS",
+                    color = NeonPink,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 16.sp,
+                    letterSpacing = 1.sp
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Any folders specified below will be skipped entirely during automatic and manual music library scans.",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    // Add exclusion input field
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = newFolderInput,
+                            onValueChange = { newFolderInput = it },
+                            placeholder = { Text("e.g. Downloads/Temp", color = AudioMutedText, fontSize = 12.sp) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = NeonPink,
+                                cursorColor = NeonPink
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = {
+                                if (newFolderInput.isNotBlank()) {
+                                    viewModel.addExcludedFolder(newFolderInput.trim())
+                                    newFolderInput = ""
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.AddCircle, contentDescription = "Add Exclusion", tint = NeonPink)
+                        }
+                    }
+
+                    // Existing exclusions list
+                    if (excludedFolders.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(GlassGrey)
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("No folders currently excluded.", color = AudioMutedText, fontSize = 12.sp)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            itemsIndexed(excludedFolders.toList()) { _, folder ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(GlassGrey)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = folder,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.removeExcludedFolder(folder) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Delete", tint = Color.Red, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showExcludeDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = NeonPink)
+                ) {
+                    Text("CLOSE", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = DeepObsidian
+        )
     }
 
     // Dialog: Create Playlist
@@ -467,9 +798,87 @@ fun SongsTab(
     onAddToPlaylist: (SongEntity) -> Unit,
     onDeleteClick: (SongEntity) -> Unit,
     onAddToQueueNext: (SongEntity) -> Unit,
-    onAddToQueueEnd: (SongEntity) -> Unit
+    onAddToQueueEnd: (SongEntity) -> Unit,
+    onTriggerScan: () -> Unit,
+    onManageExclusionsClick: () -> Unit,
+    onRenameClick: (SongEntity) -> Unit
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredSongs = remember(songs, searchQuery) {
+        if (searchQuery.isBlank()) {
+            songs
+        } else {
+            songs.filter {
+                it.title.contains(searchQuery, ignoreCase = true) ||
+                it.artist.contains(searchQuery, ignoreCase = true) ||
+                it.album.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        // Search text field
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search title, artist or album...", color = AudioMutedText) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = ElectricCyan) },
+            trailingIcon = if (searchQuery.isNotEmpty()) {
+                {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White)
+                    }
+                }
+            } else null,
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = ElectricCyan,
+                unfocusedBorderColor = GlassGrey,
+                focusedContainerColor = MatteSlate.copy(alpha = 0.5f),
+                unfocusedContainerColor = MatteSlate.copy(alpha = 0.3f),
+                cursorColor = ElectricCyan
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
+        )
+
+        // Exclusions & scanning control row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onTriggerScan,
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan.copy(alpha = 0.15f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("SCAN STORAGE", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = onManageExclusionsClick,
+                colors = ButtonDefaults.buttonColors(containerColor = NeonPink.copy(alpha = 0.15f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, NeonPink.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(Icons.Default.FolderOff, contentDescription = null, tint = NeonPink, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("EXCLUDE FOLDERS", color = NeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
         // Quick import panel
         Row(
             modifier = Modifier
@@ -477,22 +886,22 @@ fun SongsTab(
                 .clip(RoundedCornerShape(12.dp))
                 .background(GlassGrey)
                 .clickable { onImportClick() }
-                .padding(16.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            Icon(Icons.Default.Download, contentDescription = null, tint = ElectricCyan)
+            Icon(Icons.Default.Download, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Import Offline Audio File", color = ElectricCyan, fontWeight = FontWeight.Bold)
+            Text("Import Offline Audio File", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (songs.isEmpty()) {
+            if (filteredSongs.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -513,7 +922,7 @@ fun SongsTab(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "Import songs or convert standard videos details",
+                            "Import songs, scan device storage, or convert videos.",
                             color = AudioMutedText,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center,
@@ -522,7 +931,7 @@ fun SongsTab(
                     }
                 }
             } else {
-                itemsIndexed(songs) { _, song ->
+                itemsIndexed(filteredSongs) { _, song ->
                     SongListItem(
                         song = song,
                         isActive = song.id == currentSong?.id,
@@ -531,7 +940,8 @@ fun SongsTab(
                         onAddToPlaylist = { onAddToPlaylist(song) },
                         onDelete = { onDeleteClick(song) },
                         onAddToQueueNext = { onAddToQueueNext(song) },
-                        onAddToQueueEnd = { onAddToQueueEnd(song) }
+                        onAddToQueueEnd = { onAddToQueueEnd(song) },
+                        onRename = { onRenameClick(song) }
                     )
                 }
             }
@@ -653,78 +1063,171 @@ fun PlaylistSongsScreen(
     onSongClick: (SongEntity) -> Unit,
     onRemoveFromPlaylist: (SongEntity) -> Unit,
     onAddToQueue: (SongEntity) -> Unit,
-    listToUse: List<SongEntity>
+    listToUse: List<SongEntity>,
+    onMoveUp: (SongEntity) -> Unit,
+    onMoveDown: (SongEntity) -> Unit,
+    onSortByTitle: () -> Unit,
+    onSortByDate: () -> Unit,
+    onSortBySize: () -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        if (songs.isEmpty()) {
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 40.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (songs.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SORT BY:",
+                    color = AudioMutedText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+
+                // Title Sort
+                Button(
+                    onClick = onSortByTitle,
+                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    modifier = Modifier.height(28.dp)
                 ) {
-                    Icon(
-                        Icons.Default.SettingsVoice,
-                        contentDescription = null,
-                        tint = AudioMutedText,
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("This playlist is currently empty", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text("Choose songs in All Songs tab and add them here to play!", color = AudioMutedText, fontSize = 12.sp)
+                    Text("A-Z", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // Date Sort
+                Button(
+                    onClick = onSortByDate,
+                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Text("Newest", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // Size Sort
+                Button(
+                    onClick = onSortBySize,
+                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Text("Size", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
-        } else {
-            itemsIndexed(songs) { _, song ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (song.id == currentSong?.id) GlassGrey else MatteSlate
-                    )
-                ) {
-                    Row(
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (songs.isEmpty()) {
+                item {
+                    Column(
                         modifier = Modifier
-                            .clickable { onSongClick(song) }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Wave icon for currently playing item
-                        if (song.id == currentSong?.id) {
-                            AnimatedEqualizerBars(isPlaying = isPlaying)
-                            Spacer(modifier = Modifier.width(12.dp))
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                song.title,
-                                color = if (song.id == currentSong?.id) ElectricCyan else Color.White,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                song.artist,
-                                color = AudioMutedText,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { onAddToQueue(song) }
+                        Icon(
+                            Icons.Default.SettingsVoice,
+                            contentDescription = null,
+                            tint = AudioMutedText,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("This playlist is currently empty", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Choose songs in All Songs tab and add them here to play!", color = AudioMutedText, fontSize = 12.sp)
+                    }
+                }
+            } else {
+                itemsIndexed(songs) { index, song ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (song.id == currentSong?.id) GlassGrey else MatteSlate
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .clickable { onSongClick(song) }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to Queue", tint = Color.White)
-                        }
+                            // Wave icon for currently playing item
+                            if (song.id == currentSong?.id) {
+                                AnimatedEqualizerBars(isPlaying = isPlaying)
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
 
-                        IconButton(
-                            onClick = { onRemoveFromPlaylist(song) }
-                        ) {
-                            Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Remove From Playlist", tint = Color.Red)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    song.title,
+                                    color = if (song.id == currentSong?.id) ElectricCyan else Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        song.artist,
+                                        color = AudioMutedText,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    Text(" • ", color = AudioMutedText, fontSize = 11.sp)
+                                    Text(
+                                        formatSongSize(song.fileSize),
+                                        color = AudioMutedText.copy(alpha = 0.8f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            // Manual Reordering Shifting buttons
+                            IconButton(
+                                onClick = { onMoveUp(song) },
+                                enabled = index > 0,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowUp,
+                                    contentDescription = "Move Up",
+                                    tint = if (index > 0) Color.White else Color.White.copy(alpha = 0.25f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onMoveDown(song) },
+                                enabled = index < songs.size - 1,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Move Down",
+                                    tint = if (index < songs.size - 1) Color.White else Color.White.copy(alpha = 0.25f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onAddToQueue(song) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to Queue", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+
+                            IconButton(
+                                onClick = { onRemoveFromPlaylist(song) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Remove From Playlist", tint = Color.Red, modifier = Modifier.size(20.dp))
+                            }
                         }
                     }
                 }
@@ -1117,6 +1620,9 @@ fun ExpandedPlayerPanel(
     queueIndex: Int,
     isShuffle: Boolean,
     isRepeat: Boolean,
+    isRepeatOne: Boolean,
+    pointA: Long?,
+    pointB: Long?,
     onCloseClick: () -> Unit,
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
@@ -1129,7 +1635,10 @@ fun ExpandedPlayerPanel(
     onQueueReorder: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
     onToggleShuffle: () -> Unit,
-    onToggleRepeat: () -> Unit
+    onToggleRepeat: () -> Unit,
+    onToggleRepeatOne: () -> Unit,
+    onSetPointA: (Long?) -> Unit,
+    onSetPointB: (Long?) -> Unit
 ) {
     var activePlayerTab by remember { mutableStateOf(0) } // 0: Player deck, 1: Live Skip Queue List
 
@@ -1300,7 +1809,80 @@ fun ExpandedPlayerPanel(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "LISTEN TO SPECIFIC SEGMENT [A-B LOOP]",
+                            color = NeonPink,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                        if (pointA != null || pointB != null) {
+                            TextButton(
+                                onClick = { onSetPointA(null); onSetPointB(null) },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.height(24.dp)
+                            ) {
+                                Text("CLEAR", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Point A selector button
+                        Button(
+                            onClick = { onSetPointA(progress) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (pointA != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (pointA != null) NeonPink else Color.Transparent
+                            ),
+                            modifier = Modifier.weight(1f).height(36.dp),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text(
+                                text = if (pointA != null) "A: ${formatTime(pointA)}" else "SET START [A]",
+                                color = if (pointA != null) NeonPink else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        // Point B selector button
+                        Button(
+                            onClick = { onSetPointB(progress) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (pointB != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (pointB != null) NeonPink else Color.Transparent
+                            ),
+                            modifier = Modifier.weight(1f).height(36.dp),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text(
+                                text = if (pointB != null) "B: ${formatTime(pointB)}" else "SET END [B]",
+                                color = if (pointB != null) NeonPink else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
                     // ADVANCED FX DECK (Slowed and reverb controls)
                     Card(
@@ -1562,11 +2144,26 @@ fun ExpandedPlayerPanel(
                     )
                 }
 
-                IconButton(onClick = onToggleRepeat) {
+                val repeatIcon = if (isRepeatOne) Icons.Default.RepeatOne else Icons.Default.Repeat
+                val repeatTint = when {
+                    isRepeatOne -> ElectricCyan
+                    isRepeat -> CosmicPurple
+                    else -> Color.White.copy(alpha = 0.5f)
+                }
+                IconButton(onClick = {
+                    if (!isRepeat && !isRepeatOne) {
+                        onToggleRepeat() // Off -> Repeat All
+                    } else if (isRepeat) {
+                        onToggleRepeat() // Repeat All -> Off
+                        onToggleRepeatOne() // Off -> Repeat One
+                    } else {
+                        onToggleRepeatOne() // Repeat One -> Off
+                    }
+                }) {
                     Icon(
-                        Icons.Default.Repeat,
-                        contentDescription = "Repeat",
-                        tint = if (isRepeat) CosmicPurple else Color.White.copy(alpha = 0.5f),
+                        repeatIcon,
+                        contentDescription = "Repeat Mode",
+                        tint = repeatTint,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -1657,7 +2254,8 @@ fun SongListItem(
     onAddToPlaylist: () -> Unit,
     onDelete: () -> Unit,
     onAddToQueueNext: () -> Unit,
-    onAddToQueueEnd: () -> Unit
+    onAddToQueueEnd: () -> Unit,
+    onRename: () -> Unit
 ) {
     var expandedDropdown by remember { mutableStateOf(false) }
 
@@ -1692,13 +2290,34 @@ fun SongListItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    song.artist,
-                    color = AudioMutedText,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+                ) {
+                    Text(
+                        text = song.artist,
+                        color = AudioMutedText,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Text("•", color = AudioMutedText.copy(alpha = 0.5f), fontSize = 11.sp)
+                    Text(
+                        text = formatSongSize(song.fileSize),
+                        color = AudioMutedText.copy(alpha = 0.8f),
+                        fontSize = 11.sp
+                    )
+                    if (song.dateAdded > 0) {
+                        Text("•", color = AudioMutedText.copy(alpha = 0.5f), fontSize = 11.sp)
+                        Text(
+                            text = formatSongDate(song.dateAdded),
+                            color = AudioMutedText.copy(alpha = 0.7f),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
             }
 
             // Dropdown menu trigger for quick lists and delete entries
@@ -1736,6 +2355,14 @@ fun SongListItem(
                         },
                         leadingIcon = { Icon(Icons.Default.QueuePlayNext, contentDescription = null, tint = EmeraldGlow) }
                     )
+                    DropdownMenuItem(
+                        text = { Text("Rename Title", color = Color.White) },
+                        onClick = {
+                            expandedDropdown = false
+                            onRename()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = ElectricCyan) }
+                    )
                     if (!song.isPreloaded) {
                         DropdownMenuItem(
                             text = { Text("Delete Track From Device", color = Color.Red) },
@@ -1750,4 +2377,24 @@ fun SongListItem(
             }
         }
     }
+}
+
+// Global helpers for formating
+private fun formatSongSize(sizeBytes: Long): String {
+    if (sizeBytes <= 0) return "0 B"
+    val units = listOf("B", "KB", "MB", "GB")
+    var digitGroup = 0
+    var size = sizeBytes.toDouble()
+    while (size >= 1024 && digitGroup < units.size - 1) {
+        size /= 1024
+        digitGroup++
+    }
+    return String.format("%.1f %s", size, units[digitGroup])
+}
+
+private fun formatSongDate(timestamp: Long): String {
+    if (timestamp <= 0) return "Unknown"
+    val date = java.util.Date(timestamp)
+    val sdf = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
+    return sdf.format(date)
 }

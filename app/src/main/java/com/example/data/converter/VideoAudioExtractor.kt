@@ -77,8 +77,17 @@ object VideoAudioExtractor {
             muxer.start()
 
             // 4. Extraction Loop
-            val durationUs = audioFormat.getLong(MediaFormat.KEY_DURATION)
-            val bufferSize = audioFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).let { if (it <= 0) 1024 * 512 else it }
+            val durationUs = if (audioFormat.containsKey(MediaFormat.KEY_DURATION)) {
+                audioFormat.getLong(MediaFormat.KEY_DURATION)
+            } else {
+                0L
+            }
+            val bufferSize = if (audioFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                val size = audioFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                if (size <= 0) 1024 * 512 else size
+            } else {
+                1024 * 512
+            }
             val buffer = ByteBuffer.allocate(bufferSize)
             val bufferInfo = MediaCodec.BufferInfo()
             

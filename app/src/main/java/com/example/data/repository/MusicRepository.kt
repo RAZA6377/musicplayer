@@ -58,7 +58,8 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
                 durationMs = 12000L,
                 filePath = track1.absolutePath,
                 artUri = null,
-                isPreloaded = true
+                isPreloaded = true,
+                fileSize = track1.length()
             ),
             SongEntity(
                 id = "preloaded_2",
@@ -68,7 +69,8 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
                 durationMs = 12000L,
                 filePath = track2.absolutePath,
                 artUri = null,
-                isPreloaded = true
+                isPreloaded = true,
+                fileSize = track2.length()
             ),
             SongEntity(
                 id = "preloaded_3",
@@ -78,7 +80,8 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
                 durationMs = 12000L,
                 filePath = track3.absolutePath,
                 artUri = null,
-                isPreloaded = true
+                isPreloaded = true,
+                fileSize = track3.length()
             )
         )
 
@@ -121,7 +124,8 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
                 durationMs = durationMs,
                 filePath = targetFile.absolutePath,
                 artUri = null,
-                isPreloaded = false
+                isPreloaded = false,
+                fileSize = targetFile.length()
             )
 
             musicDao.insertSong(song)
@@ -175,7 +179,8 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
                         album = "Ex-Video Studio",
                         durationMs = durationMs,
                         filePath = audioFile.absolutePath,
-                        isPreloaded = false
+                        isPreloaded = false,
+                        fileSize = audioFile.length()
                     )
 
                     // Write to database via Room in IO coroutine
@@ -213,27 +218,155 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
     }
 
     suspend fun createPlaylist(name: String) = withContext(Dispatchers.IO) {
-        val playlist = PlaylistEntity(
-            id = UUID.randomUUID().toString(),
-            name = name
-        )
-        musicDao.insertPlaylist(playlist)
+        try {
+            val playlist = PlaylistEntity(
+                id = UUID.randomUUID().toString(),
+                name = name
+            )
+            musicDao.insertPlaylist(playlist)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating playlist: $name", e)
+        }
     }
 
     suspend fun deletePlaylist(playlistId: String) = withContext(Dispatchers.IO) {
-        musicDao.deletePlaylistById(playlistId)
+        try {
+            musicDao.deletePlaylistById(playlistId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting playlist: $playlistId", e)
+        }
     }
 
     suspend fun addSongToPlaylist(playlistId: String, songId: String) = withContext(Dispatchers.IO) {
-        musicDao.insertPlaylistSongCrossRef(PlaylistSongCrossRef(playlistId, songId))
+        try {
+            musicDao.insertPlaylistSongCrossRef(PlaylistSongCrossRef(playlistId, songId))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding song $songId to playlist $playlistId", e)
+        }
     }
 
     suspend fun removeSongFromPlaylist(playlistId: String, songId: String) = withContext(Dispatchers.IO) {
-        musicDao.deletePlaylistSongCrossRef(playlistId, songId)
+        try {
+            musicDao.deletePlaylistSongCrossRef(playlistId, songId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing song $songId from playlist $playlistId", e)
+        }
     }
 
     suspend fun refreshQueue(queueItems: List<QueueItemEntity>) = withContext(Dispatchers.IO) {
-        musicDao.updateQueue(queueItems)
+        try {
+            musicDao.updateQueue(queueItems)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error refreshing queue", e)
+        }
+    }
+
+    // Scan device folders for songs with support for exclusion
+    suspend fun scanDeviceForSongs(excludedFolders: List<String>): List<SongEntity> = withContext(Dispatchers.IO) {
+        val detected = mutableListOf<SongEntity>()
+        
+        // Scan standard music & downloads folders
+        val musicDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC)
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val filesDir = context.getExternalFilesDir(null)
+        val internalFilesDir = context.filesDir
+
+        val roots = listOfNotNull(filesDir, internalFilesDir, musicDir, downloadsDir)
+        
+        for (root in roots) {
+            if (root.exists() && root.isDirectory) {
+                scanDirRecursive(root, excludedFolders, detected)
+            }
+        }
+        
+        if (detected.isNotEmpty()) {
+            musicDao.insertSongs(detected)
+        }
+        detected
+    }
+
+    private fun scanDirRecursive(dir: File, excludedFolders: List<String>, result: MutableList<SongEntity>) {
+        if (excludedFolders.any { dir.absolutePath.contains(it) || dir.name.equals(it, ignoreCase = true) }) {
+            Log.d(TAG, "Skipping excluded directory: ${dir.absolutePath}")
+            return
+        }
+        val files = dir.listFiles() ?: return
+        for (file in files) {
+            if (file.isDirectory) {
+                scanDirRecursive(file, excludedFolders, result)
+            } else if (file.isFile && (file.extension.equals("mp3", true) || file.extension.equals("wav", true) || file.extension.equals("m4a", true))) {
+                val path = file.absolutePath
+                val songId = "scanned_${path.hashCode()}"
+                
+                var title = file.nameWithoutExtension
+                var artist = "Local Folder"
+                var album = dir.name
+                var durationMs = 0L
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(path)
+                    title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: title
+                    artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: artist
+                    album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: album
+                    durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 12000L
+                } catch (e: Exception) {
+                    // Ignore
+                } finally {
+                    try { retriever.release() } catch (e: Exception) {}
+                }
+                
+                result.add(
+                    SongEntity(
+                        id = songId,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        durationMs = durationMs,
+                        filePath = path,
+                        artUri = null,
+                        isPreloaded = false,
+                        dateAdded = file.lastModified(),
+                        fileSize = file.length()
+                    )
+                )
+            }
+        }
+    }
+
+    // Rename song on disk and update Room DB
+    suspend fun renameSong(song: SongEntity, newTitle: String): SongEntity? = withContext(Dispatchers.IO) {
+        try {
+            if (song.isPreloaded) {
+                val updated = song.copy(title = newTitle)
+                musicDao.insertSong(updated)
+                return@withContext updated
+            }
+            
+            val originalFile = File(song.filePath)
+            if (originalFile.exists()) {
+                val parentDir = originalFile.parentFile
+                val extension = originalFile.extension
+                val sanitizedTitle = newTitle.replace(Regex("[^a-zA-Z0-9_\\-\\s]"), "")
+                val newFile = File(parentDir, "$sanitizedTitle.$extension")
+                
+                if (originalFile.renameTo(newFile)) {
+                    val updated = song.copy(
+                        title = newTitle,
+                        filePath = newFile.absolutePath,
+                        dateAdded = System.currentTimeMillis()
+                    )
+                    musicDao.insertSong(updated)
+                    return@withContext updated
+                }
+            } else {
+                val updated = song.copy(title = newTitle)
+                musicDao.insertSong(updated)
+                return@withContext updated
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed renaming song physical/DB metadata", e)
+        }
+        null
     }
 
     // Helpers

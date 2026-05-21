@@ -58,6 +58,15 @@ class AudioPlayerManager private constructor(private val context: Context) {
     private val _isRepeatAll = MutableStateFlow(false)
     val isRepeatAll: StateFlow<Boolean> = _isRepeatAll.asStateFlow()
 
+    private val _isRepeatOne = MutableStateFlow(false)
+    val isRepeatOne: StateFlow<Boolean> = _isRepeatOne.asStateFlow()
+
+    private val _pointA = MutableStateFlow<Long?>(null)
+    val pointA: StateFlow<Long?> = _pointA.asStateFlow()
+
+    private val _pointB = MutableStateFlow<Long?>(null)
+    val pointB: StateFlow<Long?> = _pointB.asStateFlow()
+
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var progressTrackerJob: Job? = null
 
@@ -362,10 +371,33 @@ class AudioPlayerManager private constructor(private val context: Context) {
 
     fun toggleRepeat() {
         _isRepeatAll.value = !_isRepeatAll.value
+        if (_isRepeatAll.value) {
+            _isRepeatOne.value = false
+        }
+    }
+
+    fun toggleRepeatOne() {
+        _isRepeatOne.value = !_isRepeatOne.value
+        if (_isRepeatOne.value) {
+            _isRepeatAll.value = false
+        }
+    }
+
+    fun setPointA(ms: Long?) {
+        _pointA.value = ms
+    }
+
+    fun setPointB(ms: Long?) {
+        _pointB.value = ms
     }
 
     private fun handleSongCompletion() {
-        playNext()
+        if (_isRepeatOne.value) {
+            seekTo(0)
+            play()
+        } else {
+            playNext()
+        }
     }
 
     private fun startProgressTracking() {
@@ -375,7 +407,15 @@ class AudioPlayerManager private constructor(private val context: Context) {
                 try {
                     mediaPlayer?.let { mp ->
                         if (mp.isPlaying) {
-                            _playbackProgress.value = mp.currentPosition.toLong()
+                            val pos = mp.currentPosition.toLong()
+                            _playbackProgress.value = pos
+                            
+                            // Check A-B Point Looping
+                            val a = _pointA.value
+                            val b = _pointB.value
+                            if (a != null && b != null && pos >= b) {
+                                seekTo(a)
+                            }
                         }
                     }
                 } catch (e: Exception) {

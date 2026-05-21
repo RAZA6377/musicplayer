@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.io.File
 
 class MusicViewModel(application: Application) : AndroidViewModel(application) {
@@ -30,6 +31,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     // UI State flows
     val allSongs: StateFlow<List<SongEntity>> = repository.allSongs.stateInViewModel(emptyList())
     val allPlaylists: StateFlow<List<PlaylistEntity>> = repository.allPlaylists.stateInViewModel(emptyList())
+
+    // Startup & manual scan states
+    private val _isLoadingData = MutableStateFlow(true)
+    val isLoadingData: StateFlow<Boolean> = _isLoadingData.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _scannedCount = MutableStateFlow<Int?>(null)
+    val scannedCount: StateFlow<Int?> = _scannedCount.asStateFlow()
+
+    private val _newSongsAddedCount = MutableStateFlow<Int?>(null)
+    val newSongsAddedCount: StateFlow<Int?> = _newSongsAddedCount.asStateFlow()
+
+    private val _excludedFolders = MutableStateFlow<List<String>>(emptyList())
+    val excludedFolders: StateFlow<List<String>> = _excludedFolders.asStateFlow()
+
+    private val sharedPrefs = application.getSharedPreferences("dynamic_player_prefs", android.content.Context.MODE_PRIVATE)
 
     // Currently selected item in the UI
     private val _selectedPlaylist = MutableStateFlow<PlaylistEntity?>(null)
@@ -56,10 +75,29 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var allCrossReferences: List<PlaylistSongCrossRef> = emptyList()
 
     init {
+        loadExcludedFolders()
         // Preload sample tracks and load relations in background
         viewModelScope.launch {
-            repository.preloadSampleSongs()
-            observeDatabaseRelations()
+            _isLoadingData.value = true
+            try {
+                repository.preloadSampleSongs()
+                observeDatabaseRelations()
+                
+                // Allow our awesome neon theme loading animation to be displayed on first opening
+                delay(1800)
+                
+                // Perform quick auto scan on opening
+                val countBefore = db.musicDao().getSongsCount()
+                val folders = _excludedFolders.value
+                repository.scanDeviceForSongs(folders)
+                val countAfter = db.musicDao().getSongsCount()
+                val newlyAdded = (countAfter - countBefore).coerceAtLeast(0)
+                _newSongsAddedCount.value = newlyAdded
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed preloading database songs on startup", e)
+            } finally {
+                _isLoadingData.value = false
+            }
         }
     }
 
@@ -237,6 +275,102 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnectDrive() {
         _driveAuthToken.value = ""
         syncManager.disconnectDrive()
+    }
+
+    // Excluded folder helpers
+    private fun loadExcludedFolders() {
+        val raw = sharedPrefs.getString("excluded_folders", "System,WhatsApp,Telegram,Android") ?: "System,WhatsApp,Telegram,Android"
+        _excludedFolders.value = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    fun addExcludedFolder(folderName: String) {
+        val current = _excludedFolders.value.toMutableList()
+        val trimmed = folderName.trim()
+        if (trimmed.isNotEmpty() && !current.contains(trimmed)) {
+            current.add(trimmed)
+            _excludedFolders.value = current
+            sharedPrefs.edit().putString("excluded_folders", current.joinToString(",")).apply()
+        }
+    }
+
+    fun removeExcludedFolder(folderName: String) {
+        val current = _excludedFolders.value.toMutableList()
+        if (current.remove(folderName)) {
+            _excludedFolders.value = current
+            sharedPrefs.edit().putString("excluded_folders", current.joinToString(",")).apply()
+        }
+    }
+
+    // Trigger explicit manual scan
+    fun triggerManualScan() {
+        viewModelScope.launch {
+            _isScanning.value = true
+            _isLoadingData.value = true
+            try {
+                val countBefore = db.musicDao().getSongsCount()
+                val folders = _excludedFolders.value
+                repository.scanDeviceForSongs(folders)
+                val countAfter = db.musicDao().getSongsCount()
+                val newlyAdded = (countAfter - countBefore).coerceAtLeast(0)
+                _scannedCount.value = countAfter
+                _newSongsAddedCount.value = newlyAdded
+            } catch (e: Exception) {
+                Log.e(TAG, "Manual scan failed", e)
+            } finally {
+                delay(1000) // visual touch for the scan screen
+                _isScanning.value = false
+                _isLoadingData.value = false
+            }
+        }
+    }
+
+    fun dismissNewSongsDialog() {
+        _newSongsAddedCount.value = null
+    }
+
+    // Rename song on disk & db
+    fun renameSong(song: SongEntity, newTitle: String) {
+        viewModelScope.launch {
+            val updated = repository.renameSong(song, newTitle)
+            if (updated != null) {
+                Log.d(TAG, "Successfully renamed song metadata & file to: $newTitle")
+            }
+        }
+    }
+
+    // Playlist Sorting & Reordering Up / Down
+    fun movePlaylistSongUp(song: SongEntity) {
+        val current = _playlistSongs.value.toMutableList()
+        val index = current.indexOfFirst { it.id == song.id }
+        if (index > 0) {
+            val temp = current[index]
+            current[index] = current[index - 1]
+            current[index - 1] = temp
+            _playlistSongs.value = current
+        }
+    }
+
+    fun movePlaylistSongDown(song: SongEntity) {
+        val current = _playlistSongs.value.toMutableList()
+        val index = current.indexOfFirst { it.id == song.id }
+        if (index >= 0 && index < current.size - 1) {
+            val temp = current[index]
+            current[index] = current[index + 1]
+            current[index + 1] = temp
+            _playlistSongs.value = current
+        }
+    }
+
+    fun sortPlaylistByTitle() {
+        _playlistSongs.value = _playlistSongs.value.sortedBy { it.title.lowercase() }
+    }
+
+    fun sortPlaylistByDate() {
+        _playlistSongs.value = _playlistSongs.value.sortedByDescending { it.dateAdded }
+    }
+
+    fun sortPlaylistBySize() {
+        _playlistSongs.value = _playlistSongs.value.sortedByDescending { it.fileSize }
     }
 
     override fun onCleared() {

@@ -13,7 +13,8 @@ data class SongEntity(
     val filePath: String, // Can be local file absolute path, raw asset, or content URI
     val artUri: String? = null,
     val isPreloaded: Boolean = false,
-    val dateAdded: Long = System.currentTimeMillis()
+    val dateAdded: Long = System.currentTimeMillis(),
+    val fileSize: Long = 0L
 )
 
 @Entity(tableName = "playlists")

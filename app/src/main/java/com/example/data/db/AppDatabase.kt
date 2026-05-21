@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         PlaylistSongCrossRef::class,
         QueueItemEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
