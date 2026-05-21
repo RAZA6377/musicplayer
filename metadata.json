@@ -1,0 +1,6 @@
+{
+  "name": "Sonic Music Player",
+  "description": "High-speed music player with offline playback, slowed & reverb dynamic processing, skip queue, playlists, video-to-MP3 extraction, and Google Drive syncing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
