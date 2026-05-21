@@ -53,6 +53,48 @@ fun MainDashboard(viewModel: MusicViewModel) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    val permissionsToRequest = remember {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.all { it }
+        if (granted) {
+            viewModel.triggerManualScan()
+        } else {
+            android.widget.Toast.makeText(context, "Storage permission is required to find device music.", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    val requestStoragePermissionAndScan = {
+        val hasPermission = permissionsToRequest.all { perm ->
+            androidx.core.content.ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (hasPermission) {
+            viewModel.triggerManualScan()
+        } else {
+            permissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    // Auto-request or auto-scan on startup if permission is granted
+    LaunchedEffect(Unit) {
+        val hasPermission = permissionsToRequest.all { perm ->
+            androidx.core.content.ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (!hasPermission) {
+            permissionLauncher.launch(permissionsToRequest)
+        } else {
+            viewModel.triggerManualScan()
+        }
+    }
+
     // ViewModel & state observers
     val allSongs by viewModel.allSongs.collectAsStateWithLifecycle()
     val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle()
@@ -268,7 +310,7 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 onDeleteClick = { song -> viewModel.deleteSong(song) },
                                 onAddToQueueNext = { song -> viewModel.playerManager.addToQueueNext(song) },
                                 onAddToQueueEnd = { song -> viewModel.playerManager.addToQueueEnd(song) },
-                                onTriggerScan = { viewModel.triggerManualScan() },
+                                onTriggerScan = { requestStoragePermissionAndScan() },
                                 onManageExclusionsClick = { showExcludeDialog = true },
                                 onRenameClick = { song ->
                                     showRenameSongDialog = song
