@@ -181,6 +181,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun addSongsToPlaylist(playlistId: String, songIds: List<String>) {
+        viewModelScope.launch {
+            songIds.forEach { songId ->
+                repository.addSongToPlaylist(playlistId, songId)
+            }
+            // Refresh playlist songs view if active
+            _selectedPlaylist.value?.let { active ->
+                if (active.id == playlistId) {
+                    loadPlaylistSongs(active)
+                }
+            }
+        }
+    }
+
     fun removeSongFromPlaylist(playlistId: String, songId: String) {
         viewModelScope.launch {
             repository.removeSongFromPlaylist(playlistId, songId)

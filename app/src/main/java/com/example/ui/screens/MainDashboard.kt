@@ -142,6 +142,7 @@ fun MainDashboard(viewModel: MusicViewModel) {
     var showExcludeDialog by remember { mutableStateOf(false) }
     var showRenameSongDialog by remember { mutableStateOf<SongEntity?>(null) }
     var renameSongInput by remember { mutableStateOf("") }
+    var showMultiSelectSongsDialog by remember { mutableStateOf(false) }
 
     // Activity result launcher for audio files import
     val audioPickerLauncher = rememberLauncherForActivityResult(
@@ -294,7 +295,8 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 onMoveDown = { viewModel.movePlaylistSongDown(it) },
                                 onSortByTitle = { viewModel.sortPlaylistByTitle() },
                                 onSortByDate = { viewModel.sortPlaylistByDate() },
-                                onSortBySize = { viewModel.sortPlaylistBySize() }
+                                onSortBySize = { viewModel.sortPlaylistBySize() },
+                                onAddSongsClick = { showMultiSelectSongsDialog = true }
                             )
                         }
                         selectedTab == 0 -> {
@@ -786,6 +788,231 @@ fun MainDashboard(viewModel: MusicViewModel) {
             containerColor = MatteSlate
         )
     }
+
+    // Dialog: Multi-Select Songs to Add to Playlist
+    if (showMultiSelectSongsDialog && selectedPlaylist != null) {
+        val targetPlaylist = selectedPlaylist!!
+        // Filter out songs that are already in the playlist to avoid duplicate additions
+        val availableSongs = allSongs.filter { song -> 
+            playlistSongs.none { it.id == song.id } 
+        }
+        
+        var searchQuery by remember { mutableStateOf("") }
+        var selectedSongIds by remember { mutableStateOf(setOf<String>()) }
+        
+        // Filter available songs by search query
+        val filteredSongs = availableSongs.filter {
+            it.title.contains(searchQuery, ignoreCase = true) || 
+            it.artist.contains(searchQuery, ignoreCase = true)
+        }
+
+        AlertDialog(
+            onDismissRequest = { showMultiSelectSongsDialog = false },
+            title = {
+                Column {
+                    Text(
+                        text = "Add Songs to ${targetPlaylist.name}",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Select multiple files to insert at once",
+                        color = AudioMutedText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Normal
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Search Bar
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Search songs...", color = AudioMutedText, fontSize = 14.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AudioMutedText) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CosmicPurple,
+                            unfocusedBorderColor = GlassGrey,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedContainerColor = GlassGrey.copy(alpha = 0.5f),
+                            unfocusedContainerColor = GlassGrey.copy(alpha = 0.5f)
+                        ),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    
+                    // Select All / Deselect Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (filteredSongs.isNotEmpty()) "${selectedSongIds.size} selected of ${filteredSongs.size}" else "0 songs available",
+                            color = ElectricCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        
+                        if (filteredSongs.isNotEmpty()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(
+                                    onClick = {
+                                        selectedSongIds = filteredSongs.map { it.id }.toSet()
+                                    },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text("Select All", color = CosmicPurple, fontSize = 12.sp)
+                                }
+                                
+                                TextButton(
+                                    onClick = {
+                                        selectedSongIds = emptySet()
+                                    },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text("Deselect All", color = AudioMutedText, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // Songs Checklist
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (filteredSongs.isEmpty()) {
+                            item {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        tint = AudioMutedText,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = if (searchQuery.isNotEmpty()) "No match found for '$searchQuery'" 
+                                               else "All local sound tracks are already in this playlist!",
+                                        color = AudioMutedText,
+                                        fontSize = 13.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            itemsIndexed(filteredSongs) { _, song ->
+                                val isChecked = selectedSongIds.contains(song.id)
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedSongIds = if (isChecked) {
+                                                selectedSongIds - song.id
+                                            } else {
+                                                selectedSongIds + song.id
+                                            }
+                                        },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isChecked) GlassGrey else MatteSlate
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .padding(8.dp)
+                                            .fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Checkbox(
+                                            checked = isChecked,
+                                            onCheckedChange = { checked ->
+                                                selectedSongIds = if (checked == true) {
+                                                    selectedSongIds + song.id
+                                                } else {
+                                                    selectedSongIds - song.id
+                                                }
+                                            },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = CosmicPurple,
+                                                checkmarkColor = Color.White,
+                                                uncheckedColor = AudioMutedText
+                                            )
+                                        )
+                                        
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = song.title,
+                                                color = Color.White,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${song.artist} • ${formatSongSize(song.fileSize)}",
+                                                color = AudioMutedText,
+                                                fontSize = 11.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedSongIds.isNotEmpty()) {
+                            viewModel.addSongsToPlaylist(targetPlaylist.id, selectedSongIds.toList())
+                        }
+                        showMultiSelectSongsDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CosmicPurple,
+                        disabledContainerColor = GlassGrey
+                    ),
+                    enabled = selectedSongIds.isNotEmpty()
+                ) {
+                    Text(
+                        text = if (selectedSongIds.isEmpty()) "Add Songs" else "Add Selected (${selectedSongIds.size})",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMultiSelectSongsDialog = false }) {
+                    Text("Cancel", color = Color.White)
+                }
+            },
+            containerColor = MatteSlate
+        )
+    }
 }
 
 // Sub-component: Header Section
@@ -1110,54 +1337,79 @@ fun PlaylistSongsScreen(
     onMoveDown: (SongEntity) -> Unit,
     onSortByTitle: () -> Unit,
     onSortByDate: () -> Unit,
-    onSortBySize: () -> Unit
+    onSortBySize: () -> Unit,
+    onAddSongsClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (songs.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (songs.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "SORT:",
+                        color = AudioMutedText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+
+                    // Title Sort
+                    Button(
+                        onClick = onSortByTitle,
+                        colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text("A-Z", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Date Sort
+                    Button(
+                        onClick = onSortByDate,
+                        colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text("Newest", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Size Sort
+                    Button(
+                        onClick = onSortBySize,
+                        colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text("Size", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            // Always display "+ Add Songs" button in top row
+            Button(
+                onClick = onAddSongsClick,
+                colors = ButtonDefaults.buttonColors(containerColor = CosmicPurple),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                modifier = Modifier.height(30.dp)
             ) {
-                Text(
-                    text = "SORT BY:",
-                    color = AudioMutedText,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 4.dp)
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
                 )
-
-                // Title Sort
-                Button(
-                    onClick = onSortByTitle,
-                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Text("A-Z", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-
-                // Date Sort
-                Button(
-                    onClick = onSortByDate,
-                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Text("Newest", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-
-                // Size Sort
-                Button(
-                    onClick = onSortBySize,
-                    colors = ButtonDefaults.buttonColors(containerColor = GlassGrey),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Text("Size", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add Songs", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -1174,14 +1426,23 @@ fun PlaylistSongsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            Icons.Default.SettingsVoice,
+                            Icons.Default.LibraryMusic,
                             contentDescription = null,
                             tint = AudioMutedText,
                             modifier = Modifier.size(64.dp)
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("This playlist is currently empty", color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Choose songs in All Songs tab and add them here to play!", color = AudioMutedText, fontSize = 12.sp)
+                        Text("Choose songs from your library to add them here!", color = AudioMutedText, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = onAddSongsClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = CosmicPurple)
+                        ) {
+                            Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Select & Add Songs", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             } else {
