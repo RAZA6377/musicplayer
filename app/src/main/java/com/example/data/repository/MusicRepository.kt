@@ -264,25 +264,162 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
     // Scan device folders for songs with support for exclusion
     suspend fun scanDeviceForSongs(excludedFolders: List<String>): List<SongEntity> = withContext(Dispatchers.IO) {
         val detected = mutableListOf<SongEntity>()
+
+        // 1. Scan via MediaStore (extremely comprehensive for indexed system media)
+        try {
+            val mediaStoreSongs = queryMediaStore(context, excludedFolders)
+            detected.addAll(mediaStoreSongs)
+            Log.d(TAG, "MediaStore scan found ${mediaStoreSongs.size} songs")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying MediaStore", e)
+        }
         
-        // Scan standard music & downloads folders
+        // 2. Scan physical root folders recursively (picks up un-indexed custom folders like data/songs)
+        try {
+            val roots = getStorageRoots(context)
+            Log.d(TAG, "Discovered ${roots.size} storage roots to scan: $roots")
+            for (root in roots) {
+                if (root.exists() && root.isDirectory) {
+                    scanDirRecursive(root, excludedFolders, detected)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning physical folders", e)
+        }
+        
+        // Remove duplicates by filePath
+        val uniqueSongs = detected.distinctBy { it.filePath }
+        
+        if (uniqueSongs.isNotEmpty()) {
+            musicDao.insertSongs(uniqueSongs)
+        }
+        uniqueSongs
+    }
+
+    private fun queryMediaStore(context: Context, excludedFolders: List<String>): List<SongEntity> {
+        val detected = mutableListOf<SongEntity>()
+        val uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            android.provider.MediaStore.Audio.Media._ID,
+            android.provider.MediaStore.Audio.Media.TITLE,
+            android.provider.MediaStore.Audio.Media.ARTIST,
+            android.provider.MediaStore.Audio.Media.ALBUM,
+            android.provider.MediaStore.Audio.Media.DURATION,
+            android.provider.MediaStore.Audio.Media.DATA,
+            android.provider.MediaStore.Audio.Media.DATE_ADDED,
+            android.provider.MediaStore.Audio.Media.SIZE
+        )
+        
+        val selection = "${android.provider.MediaStore.Audio.Media.IS_MUSIC} != 0"
+        
+        try {
+            context.contentResolver.query(uri, projection, selection, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+                val titleCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE)
+                val artistCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST)
+                val albumCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM)
+                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DURATION)
+                val dataCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATA)
+                val dateAddedCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATE_ADDED)
+                val sizeCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.SIZE)
+                
+                while (cursor.moveToNext()) {
+                    val path = cursor.getString(dataCol) ?: continue
+                    
+                    // Skip excluded folders
+                    if (excludedFolders.any { path.contains(it, ignoreCase = true) }) {
+                        continue
+                    }
+                    
+                    val title = cursor.getString(titleCol) ?: File(path).nameWithoutExtension
+                    val artist = cursor.getString(artistCol) ?: "Unknown Artist"
+                    val album = cursor.getString(albumCol) ?: "Unknown Album"
+                    val durationMs = cursor.getLong(durationCol)
+                    val dateAdded = cursor.getLong(dateAddedCol) * 1000 // MediaStore stores seconds
+                    val size = cursor.getLong(sizeCol)
+                    
+                    val isSupported = path.endsWith(".mp3", true) || 
+                                      path.endsWith(".wav", true) || 
+                                      path.endsWith(".m4a", true) ||
+                                      path.endsWith(".ogg", true) ||
+                                      path.endsWith(".aac", true) ||
+                                      path.endsWith(".flac", true)
+                                      
+                    if (isSupported) {
+                        val songId = "scanned_${path.hashCode()}"
+                        detected.add(
+                            SongEntity(
+                                id = songId,
+                                title = title,
+                                artist = artist,
+                                album = album,
+                                durationMs = if (durationMs > 0) durationMs else 12000L,
+                                filePath = path,
+                                artUri = null,
+                                isPreloaded = false,
+                                dateAdded = dateAdded,
+                                fileSize = size
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying ContentResolver for MediaStore", e)
+        }
+        return detected
+    }
+
+    private fun getStorageRoots(context: Context): List<File> {
+        val roots = mutableListOf<File>()
+        
+        // 1. Primary External Storage Root (/storage/emulated/0)
+        try {
+            val primaryRoot = android.os.Environment.getExternalStorageDirectory()
+            if (primaryRoot != null && primaryRoot.exists() && primaryRoot.isDirectory) {
+                roots.add(primaryRoot)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting primary storage root", e)
+        }
+        
+        // 2. Secondary SD cards / OTG drives, etc.
+        try {
+            val externalDirs = context.getExternalFilesDirs(null)
+            for (dir in externalDirs) {
+                if (dir != null) {
+                    val path = dir.absolutePath
+                    val storageIndex = path.indexOf("/Android/data")
+                    if (storageIndex != -1) {
+                        val rootPath = path.substring(0, storageIndex)
+                        val rootFile = File(rootPath)
+                        if (rootFile.exists() && rootFile.isDirectory && !roots.contains(rootFile)) {
+                            roots.add(rootFile)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error seeking secondary storage roots", e)
+        }
+
+        // 3. Fallbacks to ensure standard directories are included
         val musicDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC)
         val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
         val filesDir = context.getExternalFilesDir(null)
         val internalFilesDir = context.filesDir
 
-        val roots = listOfNotNull(filesDir, internalFilesDir, musicDir, downloadsDir)
-        
-        for (root in roots) {
-            if (root.exists() && root.isDirectory) {
-                scanDirRecursive(root, excludedFolders, detected)
+        val fallbacks = listOfNotNull(filesDir, internalFilesDir, musicDir, downloadsDir)
+        for (fallback in fallbacks) {
+            if (fallback.exists() && fallback.isDirectory && !roots.contains(fallback)) {
+                val alreadyCovered = roots.any { root -> fallback.absolutePath.startsWith(root.absolutePath) }
+                if (!alreadyCovered) {
+                    roots.add(fallback)
+                }
             }
         }
         
-        if (detected.isNotEmpty()) {
-            musicDao.insertSongs(detected)
-        }
-        detected
+        return roots
     }
 
     private fun scanDirRecursive(dir: File, excludedFolders: List<String>, result: MutableList<SongEntity>) {
@@ -290,45 +427,59 @@ class MusicRepository(private val context: Context, private val db: AppDatabase)
             Log.d(TAG, "Skipping excluded directory: ${dir.absolutePath}")
             return
         }
-        val files = dir.listFiles() ?: return
-        for (file in files) {
+        val fileList = dir.listFiles() ?: return
+        for (file in fileList) {
             if (file.isDirectory) {
-                scanDirRecursive(file, excludedFolders, result)
-            } else if (file.isFile && (file.extension.equals("mp3", true) || file.extension.equals("wav", true) || file.extension.equals("m4a", true))) {
-                val path = file.absolutePath
-                val songId = "scanned_${path.hashCode()}"
-                
-                var title = file.nameWithoutExtension
-                var artist = "Local Folder"
-                var album = dir.name
-                var durationMs = 0L
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(path)
-                    title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: title
-                    artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: artist
-                    album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: album
-                    durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 12000L
-                } catch (e: Exception) {
-                    // Ignore
-                } finally {
-                    try { retriever.release() } catch (e: Exception) {}
+                val name = file.name
+                // Skip hidden folders and Android system directories to avoid overhead/access issues
+                if (name.startsWith(".") || name.equals("Android", ignoreCase = true) || name.equals("obb", ignoreCase = true)) {
+                    continue
                 }
-                
-                result.add(
-                    SongEntity(
-                        id = songId,
-                        title = title,
-                        artist = artist,
-                        album = album,
-                        durationMs = durationMs,
-                        filePath = path,
-                        artUri = null,
-                        isPreloaded = false,
-                        dateAdded = file.lastModified(),
-                        fileSize = file.length()
+                scanDirRecursive(file, excludedFolders, result)
+            } else if (file.isFile) {
+                val extension = file.extension
+                if (extension.equals("mp3", true) || 
+                    extension.equals("wav", true) || 
+                    extension.equals("m4a", true) ||
+                    extension.equals("ogg", true) ||
+                    extension.equals("aac", true) ||
+                    extension.equals("flac", true)) {
+                    
+                    val path = file.absolutePath
+                    val songId = "scanned_${path.hashCode()}"
+                    
+                    var title = file.nameWithoutExtension
+                    var artist = "Local Folder"
+                    var album = dir.name
+                    var durationMs = 0L
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(path)
+                        title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: title
+                        artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: artist
+                        album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: album
+                        durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 12000L
+                    } catch (e: Exception) {
+                        // Ignore
+                    } finally {
+                        try { retriever.release() } catch (e: Exception) {}
+                    }
+                    
+                    result.add(
+                        SongEntity(
+                            id = songId,
+                            title = title,
+                            artist = artist,
+                            album = album,
+                            durationMs = if (durationMs > 0) durationMs else 12000L,
+                            filePath = path,
+                            artUri = null,
+                            isPreloaded = false,
+                            dateAdded = file.lastModified(),
+                            fileSize = file.length()
+                        )
                     )
-                )
+                }
             }
         }
     }
