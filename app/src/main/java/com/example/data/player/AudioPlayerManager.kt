@@ -124,6 +124,8 @@ class AudioPlayerManager private constructor(private val context: Context) {
             }
             _currentSong.value = song
             _playbackProgress.value = 0L
+            _pointA.value = null
+            _pointB.value = null
             stopProgressTracking()
 
             mediaPlayer?.reset()
@@ -384,10 +386,22 @@ class AudioPlayerManager private constructor(private val context: Context) {
     }
 
     fun setPointA(ms: Long?) {
+        if (ms == null) {
+            _pointA.value = null
+            return
+        }
+        val currentB = _pointB.value
+        if (currentB != null && ms >= currentB) return // Point A must be strictly less than Point B
         _pointA.value = ms
     }
 
     fun setPointB(ms: Long?) {
+        if (ms == null) {
+            _pointB.value = null
+            return
+        }
+        val currentA = _pointA.value
+        if (currentA != null && ms <= currentA) return // Point B must be strictly greater than Point A
         _pointB.value = ms
     }
 

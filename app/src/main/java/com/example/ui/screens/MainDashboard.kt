@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.media.audiofx.PresetReverb
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -54,6 +55,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.vector.ImageVector
 
+// Global thread-safe memory cache for song artwork bitmap to prevent scrolling lag
+private val thumbnailCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
+
 @Composable
 fun SongThumbnail(
     filePath: String,
@@ -61,9 +65,10 @@ fun SongThumbnail(
     defaultIcon: ImageVector = Icons.Default.MusicNote
 ) {
     val context = LocalContext.current
-    var bitmap by remember(filePath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var bitmap by remember(filePath) { mutableStateOf<android.graphics.Bitmap?>(thumbnailCache[filePath]) }
     
     LaunchedEffect(filePath) {
+        if (bitmap != null) return@LaunchedEffect // Already loaded and cached
         withContext(Dispatchers.IO) {
             try {
                 if (filePath.startsWith("android.resource://")) {
@@ -76,7 +81,11 @@ fun SongThumbnail(
                             retriever.setDataSource(pfd.fileDescriptor)
                             val art = retriever.embeddedPicture
                             if (art != null) {
-                                bitmap = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                                val loaded = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                                if (loaded != null) {
+                                    thumbnailCache[filePath] = loaded
+                                    bitmap = loaded
+                                }
                             }
                             retriever.release()
                         }
@@ -90,7 +99,11 @@ fun SongThumbnail(
                         retriever.setDataSource(file.absolutePath)
                         val art = retriever.embeddedPicture
                         if (art != null) {
-                            bitmap = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                            val loaded = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                            if (loaded != null) {
+                                thumbnailCache[filePath] = loaded
+                                bitmap = loaded
+                            }
                         }
                         retriever.release()
                     }
@@ -212,6 +225,17 @@ fun MainDashboard(viewModel: MusicViewModel) {
     // Navigation and UI state
     var selectedTab by remember { mutableStateOf(0) } // 0: Tracks, 1: Playlists, 2: Converter, 3: Sync
     var isPlayerExpanded by remember { mutableStateOf(false) }
+
+    // Physical back button navigation handlers
+    BackHandler(enabled = isPlayerExpanded) {
+        isPlayerExpanded = false
+    }
+    BackHandler(enabled = !isPlayerExpanded && selectedPlaylist != null) {
+        viewModel.clearPlaylistSelection()
+    }
+    BackHandler(enabled = !isPlayerExpanded && selectedPlaylist == null && selectedTab != 0) {
+        selectedTab = 0
+    }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var playlistNameInput by remember { mutableStateOf("") }
     var showAddToPlaylistSheet by remember { mutableStateOf<SongEntity?>(null) }
@@ -275,7 +299,10 @@ fun MainDashboard(viewModel: MusicViewModel) {
                     )
                     NavigationBarItem(
                         selected = selectedTab == 1 || selectedPlaylist != null,
-                        onClick = { selectedTab = 1 },
+                        onClick = {
+                            selectedTab = 1
+                            viewModel.clearPlaylistSelection()
+                        },
                         icon = { Icon(Icons.Filled.QueueMusic, contentDescription = "Playlists") },
                         label = { Text("Playlists", fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(
@@ -343,7 +370,8 @@ fun MainDashboard(viewModel: MusicViewModel) {
                     },
                     onBackClick = if (selectedPlaylist != null) {
                         { viewModel.clearPlaylistSelection() }
-                    } else null
+                    } else null,
+                    isScanning = isScanning
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -1231,37 +1259,52 @@ fun MainDashboard(viewModel: MusicViewModel) {
 fun HeaderSection(
     title: String,
     subtitle: String,
-    onBackClick: (() -> Unit)? = null
+    onBackClick: (() -> Unit)? = null,
+    isScanning: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        if (onBackClick != null) {
-            IconButton(
-                onClick = onBackClick,
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .clip(CircleShape)
-                    .background(GlassGrey)
-            ) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Go back", tint = Color.White)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            if (onBackClick != null) {
+                IconButton(
+                    onClick = onBackClick,
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .clip(CircleShape)
+                        .background(GlassGrey)
+                ) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Go back", tint = Color.White)
+                }
+            }
+
+            Column {
+                Text(
+                    text = title,
+                    fontSize = 24.sp,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp
+                )
+                Text(
+                    text = if (isScanning) "SCANNING STORAGE IN BACKGROUND..." else subtitle,
+                    fontSize = 12.sp,
+                    color = if (isScanning) ElectricCyan else AudioMutedText,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
 
-        Column {
-            Text(
-                text = title,
-                fontSize = 24.sp,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.5).sp
-            )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                color = AudioMutedText,
-                fontWeight = FontWeight.Medium
+        if (isScanning) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = ElectricCyan,
+                strokeWidth = 2.dp
             )
         }
     }
@@ -1297,85 +1340,88 @@ fun SongsTab(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Search text field
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search title, artist or album...", color = AudioMutedText) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = ElectricCyan) },
-            trailingIcon = if (searchQuery.isNotEmpty()) {
-                {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White)
-                    }
-                }
-            } else null,
-            singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = ElectricCyan,
-                unfocusedBorderColor = GlassGrey,
-                focusedContainerColor = MatteSlate.copy(alpha = 0.5f),
-                unfocusedContainerColor = MatteSlate.copy(alpha = 0.3f),
-                cursorColor = ElectricCyan
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp)
-        )
-
-        // Exclusions & scanning control row
+        // Search text field + sleeks action dropdown menu row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(
-                onClick = onTriggerScan,
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan.copy(alpha = 0.15f)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f)),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(38.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("SCAN STORAGE", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search title, artist or album...", color = AudioMutedText) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = ElectricCyan) },
+                trailingIcon = if (searchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.White)
+                        }
+                    }
+                } else null,
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = ElectricCyan,
+                    unfocusedBorderColor = GlassGrey,
+                    focusedContainerColor = MatteSlate.copy(alpha = 0.5f),
+                    unfocusedContainerColor = MatteSlate.copy(alpha = 0.3f),
+                    cursorColor = ElectricCyan
+                ),
+                modifier = Modifier.weight(1f)
+            )
 
-            Button(
-                onClick = onManageExclusionsClick,
-                colors = ButtonDefaults.buttonColors(containerColor = NeonPink.copy(alpha = 0.15f)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, NeonPink.copy(alpha = 0.4f)),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(38.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Icon(Icons.Default.FolderOff, contentDescription = null, tint = NeonPink, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("EXCLUDE FOLDERS", color = NeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        // Quick import panel
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(GlassGrey)
-                .clickable { onImportClick() }
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Icon(Icons.Default.Download, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Import Offline Audio File", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-        }
 
-        Spacer(modifier = Modifier.height(12.dp))
+            // Elegant options dropdown menu button
+            var showMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(GlassGrey, RoundedCornerShape(12.dp))
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Actions Menu",
+                        tint = Color.White
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(MatteSlate)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Scan Storage", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = ElectricCyan) },
+                        onClick = {
+                            showMenu = false
+                            onTriggerScan()
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Exclude Folders", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.FolderOff, contentDescription = null, tint = NeonPink) },
+                        onClick = {
+                            showMenu = false
+                            onManageExclusionsClick()
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("Import Offline Audio", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = EmeraldGlow) },
+                        onClick = {
+                            showMenu = false
+                            onImportClick()
+                        }
+                    )
+                }
+            }
+        }
 
         LazyColumn(
             modifier = Modifier.weight(1f),
@@ -2248,182 +2294,190 @@ fun ExpandedPlayerPanel(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (activePlayerTab == 0) {
-                // Tab 1: Full console: slowed & reverb adjustments + dynamic visuals
-                Column(
+                // Tab 1: Full console: slowed & reverb adjustments + dynamic visuals (Single cohesive LazyColumn to avoid clipping and allow clean scrolling)
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Spinning CD Disk Graphic (Rotating disc)
-                    Box(
-                        modifier = Modifier
-                            .size(190.dp)
-                            .graphicsLayer {
-                                rotationZ = if (isPlaying) rotationAngle else 0f
-                            }
-                            .shadow(24.dp, shape = CircleShape)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.sweepGradient(
-                                    listOf(DeepObsidian, ElectricCyan, CosmicPurple, DeepObsidian)
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Center label groove represent vinyl
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = size.minDimension / 2.3f)
-                            drawCircle(color = Color.Black, radius = size.minDimension / 6f)
-                        }
-                        Icon(Icons.Default.Album, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(44.dp))
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        song.title,
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        song.artist,
-                        color = AudioMutedText,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Dynamic Audio Frequency Visualizer simulation (real-time equalizer wave)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val barsCount = 28
-                        val modifierFactor = if (isPlaying) 1f else 0.08f
-                        for (i in 0 until barsCount) {
-                            VisualizerWaveBar(index = i, modifierFactor = modifierFactor)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Playback progress slider
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Slider(
-                            value = progress.toFloat(),
-                            onValueChange = { onSeek(it.toLong()) },
-                            valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = ElectricCyan,
-                                activeTrackColor = ElectricCyan,
-                                inactiveTrackColor = GlassGrey
-                            )
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(formatTime(progress), color = AudioMutedText, fontSize = 11.sp)
-                            Text(formatTime(duration), color = AudioMutedText, fontSize = 11.sp)
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "LISTEN TO SPECIFIC SEGMENT [A-B LOOP]",
-                            color = NeonPink,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            letterSpacing = 0.5.sp
-                        )
-                        if (pointA != null || pointB != null) {
-                            TextButton(
-                                onClick = { onSetPointA(null); onSetPointB(null) },
-                                contentPadding = PaddingValues(0.dp),
-                                modifier = Modifier.height(24.dp)
+                    item {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            // Spinning CD Disk Graphic (Rotating disc)
+                            Box(
+                                modifier = Modifier
+                                    .size(190.dp)
+                                    .graphicsLayer {
+                                        rotationZ = if (isPlaying) rotationAngle else 0f
+                                    }
+                                    .shadow(24.dp, shape = CircleShape)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.sweepGradient(
+                                            listOf(DeepObsidian, ElectricCyan, CosmicPurple, DeepObsidian)
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text("CLEAR", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                // Center label groove represent vinyl
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = size.minDimension / 2.3f)
+                                    drawCircle(color = Color.Black, radius = size.minDimension / 6f)
+                                }
+                                Icon(Icons.Default.Album, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(44.dp))
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Text(
+                                song.title,
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                song.artist,
+                                color = AudioMutedText,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Dynamic Audio Frequency Visualizer simulation (real-time equalizer wave)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val barsCount = 28
+                                val modifierFactor = if (isPlaying) 1f else 0.08f
+                                for (i in 0 until barsCount) {
+                                    VisualizerWaveBar(index = i, modifierFactor = modifierFactor)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // Playback progress slider
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Slider(
+                                    value = progress.toFloat(),
+                                    onValueChange = { onSeek(it.toLong()) },
+                                    valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = ElectricCyan,
+                                        activeTrackColor = ElectricCyan,
+                                        inactiveTrackColor = GlassGrey
+                                    )
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(formatTime(progress), color = AudioMutedText, fontSize = 11.sp)
+                                    Text(formatTime(duration), color = AudioMutedText, fontSize = 11.sp)
+                                }
                             }
                         }
                     }
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Point A selector button
-                        Button(
-                            onClick = { onSetPointA(progress) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (pointA != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (pointA != null) NeonPink else Color.Transparent
-                            ),
-                            modifier = Modifier.weight(1f).height(36.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text(
-                                text = if (pointA != null) "A: ${formatTime(pointA)}" else "SET START [A]",
-                                color = if (pointA != null) NeonPink else Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                    item {
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "LISTEN TO SPECIFIC SEGMENT [A-B LOOP]",
+                                    color = NeonPink,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 0.5.sp
+                                )
+                                if (pointA != null || pointB != null) {
+                                    TextButton(
+                                        onClick = { onSetPointA(null); onSetPointB(null) },
+                                        contentPadding = PaddingValues(0.dp),
+                                        modifier = Modifier.height(24.dp)
+                                    ) {
+                                        Text("CLEAR", color = Color.Red, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                    }
+                                }
+                            }
 
-                        // Point B selector button
-                        Button(
-                            onClick = { onSetPointB(progress) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (pointB != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (pointB != null) NeonPink else Color.Transparent
-                            ),
-                            modifier = Modifier.weight(1f).height(36.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Text(
-                                text = if (pointB != null) "B: ${formatTime(pointB)}" else "SET END [B]",
-                                color = if (pointB != null) NeonPink else Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Point A selector button
+                                Button(
+                                    onClick = { onSetPointA(progress) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (pointA != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (pointA != null) NeonPink else Color.Transparent
+                                    ),
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = if (pointA != null) "A: ${formatTime(pointA)}" else "SET START [A]",
+                                        color = if (pointA != null) NeonPink else Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                // Point B selector button
+                                Button(
+                                    onClick = { onSetPointB(progress) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (pointB != null) NeonPink.copy(alpha = 0.2f) else GlassGrey
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (pointB != null) NeonPink else Color.Transparent
+                                    ),
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(
+                                        text = if (pointB != null) "B: ${formatTime(pointB)}" else "SET END [B]",
+                                        color = if (pointB != null) NeonPink else Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    // ADVANCED FX DECK (Slowed and reverb controls)
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = GlassGrey)
-                    ) {
-                        LazyColumn(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                    item {
+                        // ADVANCED FX DECK (Slowed and reverb controls)
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
+                            colors = CardDefaults.cardColors(containerColor = GlassGrey)
                         ) {
-                            // Part 1: Slowed controller (0.5x - 2.0x speed) with precision step buttons and quick presets
-                            item {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                // Part 1: Slowed controller (0.5x - 2.0x speed) with precision step buttons and quick presets
                                 Column {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -2490,10 +2544,8 @@ fun ExpandedPlayerPanel(
                                         }
                                     }
                                 }
-                            }
 
-                            // Part 2: Pitch shift controller (0.5x - 2.0x pitch) with precision controls and quick presets
-                            item {
+                                // Part 2: Pitch shift controller (0.5x - 2.0x pitch) with precision controls and quick presets
                                 Column {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
@@ -2560,10 +2612,8 @@ fun ExpandedPlayerPanel(
                                         }
                                     }
                                 }
-                            }
 
-                            // Part 3: Reverb setup
-                            item {
+                                // Part 3: Reverb setup
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -2582,11 +2632,9 @@ fun ExpandedPlayerPanel(
                                         )
                                     )
                                 }
-                            }
 
-                            // Part 4: Reverb environment size selector chips (Expanded presets list chunked into dual rows of 3 to represent premium studio deck)
-                            if (reverbEnabled) {
-                                item {
+                                // Part 4: Reverb environment size selector chips
+                                if (reverbEnabled) {
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         val presets = listOf(
                                             Pair("Plate", PresetReverb.PRESET_PLATE),

@@ -319,7 +319,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerManualScan() {
         viewModelScope.launch {
             _isScanning.value = true
-            _isLoadingData.value = true
             try {
                 val countBefore = db.musicDao().getSongsCount()
                 val folders = _excludedFolders.value
@@ -333,7 +332,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 delay(1000) // visual touch for the scan screen
                 _isScanning.value = false
-                _isLoadingData.value = false
             }
         }
     }
