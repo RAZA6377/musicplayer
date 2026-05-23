@@ -46,6 +46,82 @@ import kotlinx.coroutines.delay
 import kotlin.math.sin
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.graphics.vector.ImageVector
+
+@Composable
+fun SongThumbnail(
+    filePath: String,
+    modifier: Modifier = Modifier,
+    defaultIcon: ImageVector = Icons.Default.MusicNote
+) {
+    val context = LocalContext.current
+    var bitmap by remember(filePath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    
+    LaunchedEffect(filePath) {
+        withContext(Dispatchers.IO) {
+            try {
+                if (filePath.startsWith("android.resource://")) {
+                    // Resource - no metadata extraction
+                } else if (filePath.startsWith("content://")) {
+                    try {
+                        val uri = android.net.Uri.parse(filePath)
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            val retriever = android.media.MediaMetadataRetriever()
+                            retriever.setDataSource(pfd.fileDescriptor)
+                            val art = retriever.embeddedPicture
+                            if (art != null) {
+                                bitmap = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                            }
+                            retriever.release()
+                        }
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                } else {
+                    val file = java.io.File(filePath)
+                    if (file.exists() && file.isFile) {
+                        val retriever = android.media.MediaMetadataRetriever()
+                        retriever.setDataSource(file.absolutePath)
+                        val art = retriever.embeddedPicture
+                        if (art != null) {
+                            bitmap = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                        }
+                        retriever.release()
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore errors
+            }
+        }
+    }
+
+    if (bitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = "Song Artwork",
+            modifier = modifier,
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        androidx.compose.foundation.layout.Box(
+            modifier = modifier.background(GlassGrey),
+            contentAlignment = androidx.compose.ui.Alignment.Center
+        ) {
+            Icon(
+                imageVector = defaultIcon,
+                contentDescription = null,
+                tint = ElectricCyan,
+                modifier = Modifier.fillMaxSize(0.5f)
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -499,6 +575,29 @@ fun MainDashboard(viewModel: MusicViewModel) {
 
     // Dynamic Full Screen Neon Equalizer Loader Overlay
     if (isLoadingData) {
+        var loadingPercent by remember { mutableStateOf(0) }
+        LaunchedEffect(isLoadingData) {
+            if (isLoadingData) {
+                loadingPercent = 0
+                // Simulate progressive tuning steps
+                while (loadingPercent < 100) {
+                    delay(35)
+                    loadingPercent += (1..4).random()
+                    if (loadingPercent > 100) loadingPercent = 100
+                }
+            }
+        }
+        
+        val progressStepText = remember(loadingPercent) {
+            when {
+                loadingPercent < 20 -> "INDEXING LOCAL STORAGE DIRECTORIES..."
+                loadingPercent < 45 -> "TAPPING AND SCANNING FOR NEW AUDIO FILES..."
+                loadingPercent < 70 -> "INTEGRATING ROOM DATABASE STRUCTURE..."
+                loadingPercent < 90 -> "TUNING REAL-TIME SLOWED & REVERB CONSOLE..."
+                else -> "PREPARATION COMPLETE. LAUNCHING NEON ENGINE..."
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -521,8 +620,8 @@ fun MainDashboard(viewModel: MusicViewModel) {
                     label = "rotation"
                 )
                 val pulseScale by infiniteTransition.animateFloat(
-                    initialValue = 0.92f,
-                    targetValue = 1.08f,
+                    initialValue = 0.94f,
+                    targetValue = 1.06f,
                     animationSpec = infiniteRepeatable(
                         animation = tween(1100, easing = EaseInOutSine),
                         repeatMode = RepeatMode.Reverse
@@ -532,17 +631,20 @@ fun MainDashboard(viewModel: MusicViewModel) {
 
                 Box(
                     modifier = Modifier
-                        .size(96.dp)
-                        .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
+                        .size(110.dp)
+                        .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale),
+                    contentAlignment = Alignment.Center
                 ) {
+                    // Outer radial equalizer bars
                     Canvas(modifier = Modifier.fillMaxSize().rotate(rotation)) {
-                        val numBars = 12
+                        val numBars = 16
                         val center = size / 2f
-                        val outerRadius = size.minDimension / 2.4f
-                        val innerRadius = size.minDimension / 4.5f
+                        val outerRadius = size.minDimension / 2.2f
+                        val innerRadius = size.minDimension / 3.4f
                         for (i in 0 until numBars) {
                             val angleRad = Math.toRadians((i * (360f / numBars)).toDouble())
-                            val startX = (center.width + innerRadius * Math.sin(angleRad)).toFloat()
+                            // Perfect concentric mathematical calculations
+                            val startX = (center.width + innerRadius * Math.cos(angleRad)).toFloat()
                             val startY = (center.height + innerRadius * Math.sin(angleRad)).toFloat()
                             val endX = (center.width + outerRadius * Math.cos(angleRad)).toFloat()
                             val endY = (center.height + outerRadius * Math.sin(angleRad)).toFloat()
@@ -551,17 +653,27 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 color = if (i % 2 == 0) ElectricCyan else NeonPink,
                                 start = androidx.compose.ui.geometry.Offset(startX, startY),
                                 end = androidx.compose.ui.geometry.Offset(endX, endY),
-                                strokeWidth = 4.dp.toPx(),
+                                strokeWidth = 5.dp.toPx(),
                                 cap = androidx.compose.ui.graphics.StrokeCap.Round
                             )
                         }
                     }
+                    
+                    // Central spinning icon
+                    Icon(
+                        imageVector = Icons.Default.Album,
+                        contentDescription = null,
+                        tint = CosmicPurple,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .shadow(8.dp, shape = CircleShape)
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(32.dp))
 
                 Text(
-                    text = "DYNAMIC PLAYER",
+                    text = "NEON AUDIO STUDIO",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Black,
                         color = ElectricCyan,
@@ -569,14 +681,50 @@ fun MainDashboard(viewModel: MusicViewModel) {
                     )
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Progression bar
+                val progressFraction = loadingPercent / 100f
+                Box(
+                    modifier = Modifier
+                        .width(220.dp)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(GlassGrey)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progressFraction)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(ElectricCyan, CosmicPurple)
+                                )
+                            )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = if (isScanning) "SCANNING STORAGE DIRECTORIES..." else "TUNING NEON AUDIO SYSTEM...",
+                    text = "$loadingPercent%",
+                    color = Color.White,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 13.sp,
+                    letterSpacing = 1.sp
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = if (isScanning) "SCANNING STORAGE DIRECTORIES..." else progressStepText,
                     style = MaterialTheme.typography.bodySmall.copy(
                         color = AudioMutedText,
-                        letterSpacing = 1.sp
-                    )
+                        letterSpacing = 1.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp)
                 )
             }
         }
@@ -806,37 +954,74 @@ fun MainDashboard(viewModel: MusicViewModel) {
             it.artist.contains(searchQuery, ignoreCase = true)
         }
 
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showMultiSelectSongsDialog = false },
-            title = {
-                Column {
-                    Text(
-                        text = "Add Songs to ${targetPlaylist.name}",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Select multiple files to insert at once",
-                        color = AudioMutedText,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Normal
-                    )
-                }
-            },
-            text = {
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = DeepObsidian
+            ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp, vertical = 24.dp)
                 ) {
-                    // Search Bar
+                    // Header Row with back arrow, playlist title, and select counts
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { showMultiSelectSongsDialog = false },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(GlassGrey)
+                        ) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Close", tint = Color.White)
+                        }
+                        
+                        Spacer(modifier = Modifier.width(16.dp))
+                        
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Select Songs to Add",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "To: ${targetPlaylist.name}",
+                                color = AudioMutedText,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        
+                        // Select Counter / Status Bubble
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(CosmicPurple.copy(alpha = 0.2f))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "${selectedSongIds.size} Selected",
+                                color = CosmicPurple,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Search Input field
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Search songs...", color = AudioMutedText, fontSize = 14.sp) },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        placeholder = { Text("Search songs by title or artist...", color = AudioMutedText, fontSize = 14.sp) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AudioMutedText) },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = CosmicPurple,
@@ -849,72 +1034,68 @@ fun MainDashboard(viewModel: MusicViewModel) {
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
-                    
-                    // Select All / Deselect Row
+
+                    // Select All / Deselect All Bar
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (filteredSongs.isNotEmpty()) "${selectedSongIds.size} selected of ${filteredSongs.size}" else "0 songs available",
+                            text = if (filteredSongs.isNotEmpty()) "Available: ${filteredSongs.size} tracks" else "No available tracks",
                             color = ElectricCyan,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
                         
                         if (filteredSongs.isNotEmpty()) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 TextButton(
-                                    onClick = {
-                                        selectedSongIds = filteredSongs.map { it.id }.toSet()
-                                    },
+                                    onClick = { selectedSongIds = filteredSongs.map { it.id }.toSet() },
                                     contentPadding = PaddingValues(0.dp)
                                 ) {
-                                    Text("Select All", color = CosmicPurple, fontSize = 12.sp)
+                                    Text("SELECT ALL", color = CosmicPurple, fontSize = 12.sp, fontWeight = FontWeight.Black)
                                 }
                                 
                                 TextButton(
-                                    onClick = {
-                                        selectedSongIds = emptySet()
-                                    },
+                                    onClick = { selectedSongIds = emptySet() },
                                     contentPadding = PaddingValues(0.dp)
                                 ) {
-                                    Text("Deselect All", color = AudioMutedText, fontSize = 12.sp)
+                                    Text("DESELECT", color = AudioMutedText, fontSize = 12.sp, fontWeight = FontWeight.Black)
                                 }
                             }
                         }
                     }
 
-                    // Songs Checklist
+                    // Scrollable Track selection list
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f, fill = false),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (filteredSongs.isEmpty()) {
                             item {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 32.dp),
+                                        .padding(vertical = 64.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Icon(
-                                        Icons.Default.MusicNote,
+                                        Icons.Default.LibraryMusic,
                                         contentDescription = null,
                                         tint = AudioMutedText,
-                                        modifier = Modifier.size(48.dp)
+                                        modifier = Modifier.size(72.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Spacer(modifier = Modifier.height(16.dp))
                                     Text(
-                                        text = if (searchQuery.isNotEmpty()) "No match found for '$searchQuery'" 
-                                               else "All local sound tracks are already in this playlist!",
+                                        text = if (searchQuery.isNotEmpty()) "No results matching \"$searchQuery\"" 
+                                               else "Success! All tracks are already part of this playlist.",
                                         color = AudioMutedText,
-                                        fontSize = 13.sp,
+                                        fontSize = 14.sp,
                                         textAlign = TextAlign.Center,
-                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                        modifier = Modifier.padding(horizontal = 24.dp)
                                     )
                                 }
                             }
@@ -932,16 +1113,21 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                             }
                                         },
                                     colors = CardDefaults.cardColors(
-                                        containerColor = if (isChecked) GlassGrey else MatteSlate
+                                        containerColor = if (isChecked) GlassGrey else MatteSlate.copy(alpha = 0.5f)
                                     ),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isChecked) CosmicPurple.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.03f)
+                                    )
                                 ) {
                                     Row(
                                         modifier = Modifier
-                                            .padding(8.dp)
+                                            .padding(10.dp)
                                             .fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        // Checkbox with M3 styles
                                         Checkbox(
                                             checked = isChecked,
                                             onCheckedChange = { checked ->
@@ -958,14 +1144,25 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                             )
                                         )
                                         
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        
+                                        // Track Thumbnail
+                                        Box(
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                        ) {
+                                            SongThumbnail(filePath = song.filePath, modifier = Modifier.fillMaxSize())
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
                                         
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 text = song.title,
                                                 color = Color.White,
                                                 fontSize = 14.sp,
-                                                fontWeight = FontWeight.SemiBold,
+                                                fontWeight = FontWeight.Bold,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
@@ -982,36 +1179,50 @@ fun MainDashboard(viewModel: MusicViewModel) {
                             }
                         }
                     }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (selectedSongIds.isNotEmpty()) {
-                            viewModel.addSongsToPlaylist(targetPlaylist.id, selectedSongIds.toList())
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Buttons control bar at bottom
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showMultiSelectSongsDialog = false },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, GlassGrey),
+                            shape = RoundedCornerShape(24.dp)
+                        ) {
+                            Text("Discard", color = Color.White, fontWeight = FontWeight.Bold)
                         }
-                        showMultiSelectSongsDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CosmicPurple,
-                        disabledContainerColor = GlassGrey
-                    ),
-                    enabled = selectedSongIds.isNotEmpty()
-                ) {
-                    Text(
-                        text = if (selectedSongIds.isEmpty()) "Add Songs" else "Add Selected (${selectedSongIds.size})",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
+
+                        Button(
+                            onClick = {
+                                if (selectedSongIds.isNotEmpty()) {
+                                    viewModel.addSongsToPlaylist(targetPlaylist.id, selectedSongIds.toList())
+                                }
+                                showMultiSelectSongsDialog = false
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CosmicPurple,
+                                disabledContainerColor = GlassGrey
+                            ),
+                            modifier = Modifier.weight(1.5f).height(48.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            enabled = selectedSongIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.PlaylistAdd, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Insert Selected (${selectedSongIds.size})",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMultiSelectSongsDialog = false }) {
-                    Text("Cancel", color = Color.White)
-                }
-            },
-            containerColor = MatteSlate
-        )
+            }
+        }
     }
 }
 
@@ -1459,11 +1670,26 @@ fun PlaylistSongsScreen(
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Wave icon for currently playing item
-                            if (song.id == currentSong?.id) {
-                                AnimatedEqualizerBars(isPlaying = isPlaying)
-                                Spacer(modifier = Modifier.width(12.dp))
+                            // Track Thumbnail (Active Equalizer overlays on top)
+                            val isActive = song.id == currentSong?.id
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                            ) {
+                                SongThumbnail(filePath = song.filePath, modifier = Modifier.fillMaxSize())
+                                if (isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.5f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        AnimatedEqualizerBars(isPlaying = isPlaying)
+                                    }
+                                }
                             }
+                            Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
@@ -2196,49 +2422,143 @@ fun ExpandedPlayerPanel(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Part 1: Slowed controller (0.5x - 1.5x speed)
+                            // Part 1: Slowed controller (0.5x - 2.0x speed) with precision step buttons and quick presets
                             item {
                                 Column {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text("CUSTOM SLOWED [Speed]", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                        Text("${String.format("%.2f", speed)}x", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        
+                                        // Precision steps adjustment
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            IconButton(
+                                                onClick = { onSpeedChange((speed - 0.05f).coerceIn(0.5f, 2.0f)) },
+                                                modifier = Modifier.size(20.dp)
+                                            ) {
+                                                Icon(Icons.Default.Remove, contentDescription = "Decrease", tint = ElectricCyan, modifier = Modifier.size(14.dp))
+                                            }
+                                            Text("${String.format("%.2f", speed)}x", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            IconButton(
+                                                onClick = { onSpeedChange((speed + 0.05f).coerceIn(0.5f, 2.0f)) },
+                                                modifier = Modifier.size(20.dp)
+                                            ) {
+                                                Icon(Icons.Default.Add, contentDescription = "Increase", tint = ElectricCyan, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
                                     }
+                                    
                                     Slider(
                                         value = speed,
                                         onValueChange = onSpeedChange,
-                                        valueRange = 0.5f..1.5f,
+                                        valueRange = 0.5f..2.0f,
                                         colors = SliderDefaults.colors(
                                             thumbColor = ElectricCyan,
                                             activeTrackColor = ElectricCyan,
                                             inactiveTrackColor = Color.DarkGray
                                         )
                                     )
+                                    
+                                    // Quick-select preset macros
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { presetSpeed ->
+                                            val isSelected = Math.abs(speed - presetSpeed) < 0.01f
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (isSelected) ElectricCyan else Color.Black)
+                                                    .clickable { onSpeedChange(presetSpeed) }
+                                                    .padding(vertical = 4.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "${if (presetSpeed == 1.0f) "1.0x" else "${presetSpeed}x"}",
+                                                    color = if (isSelected) Color.Black else Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // Part 2: Pitch shift controller (0.5x - 1.5x speed)
+                            // Part 2: Pitch shift controller (0.5x - 2.0x pitch) with precision controls and quick presets
                             item {
                                 Column {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text("PITCH GLINT", color = CosmicPurple, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                        Text("${String.format("%.2f", pitch)}x", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        
+                                        // Precision steps adjustment
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            IconButton(
+                                                onClick = { onPitchChange((pitch - 0.05f).coerceIn(0.5f, 2.0f)) },
+                                                modifier = Modifier.size(20.dp)
+                                            ) {
+                                                Icon(Icons.Default.Remove, contentDescription = "Decrease", tint = CosmicPurple, modifier = Modifier.size(14.dp))
+                                            }
+                                            Text("${String.format("%.2f", pitch)}x", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            IconButton(
+                                                onClick = { onPitchChange((pitch + 0.05f).coerceIn(0.5f, 2.0f)) },
+                                                modifier = Modifier.size(20.dp)
+                                            ) {
+                                                Icon(Icons.Default.Add, contentDescription = "Increase", tint = CosmicPurple, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
                                     }
+                                    
                                     Slider(
                                         value = pitch,
                                         onValueChange = onPitchChange,
-                                        valueRange = 0.5f..1.5f,
+                                        valueRange = 0.5f..2.0f,
                                         colors = SliderDefaults.colors(
                                             thumbColor = CosmicPurple,
                                             activeTrackColor = CosmicPurple,
                                             inactiveTrackColor = Color.DarkGray
                                         )
                                     )
+                                    
+                                    // Quick-select preset macros
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { presetPitch ->
+                                            val isSelected = Math.abs(pitch - presetPitch) < 0.01f
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (isSelected) CosmicPurple else Color.Black)
+                                                    .clickable { onPitchChange(presetPitch) }
+                                                    .padding(vertical = 4.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "${if (presetPitch == 1.0f) "1.0x" else "${presetPitch}x"}",
+                                                    color = if (isSelected) Color.Black else Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -2264,37 +2584,44 @@ fun ExpandedPlayerPanel(
                                 }
                             }
 
-                            // Part 4: Reverb sizes selector chips
+                            // Part 4: Reverb environment size selector chips (Expanded presets list chunked into dual rows of 3 to represent premium studio deck)
                             if (reverbEnabled) {
                                 item {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         val presets = listOf(
                                             Pair("Plate", PresetReverb.PRESET_PLATE),
                                             Pair("S-Room", PresetReverb.PRESET_SMALLROOM),
+                                            Pair("M-Room", PresetReverb.PRESET_MEDIUMROOM),
+                                            Pair("L-Room", PresetReverb.PRESET_LARGEROOM),
                                             Pair("M-Hall", PresetReverb.PRESET_MEDIUMHALL),
                                             Pair("L-Hall", PresetReverb.PRESET_LARGEHALL)
                                         )
-                                        presets.forEach { pair ->
-                                            val isSelected = reverbPreset == pair.second.toInt()
-                                            Box(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(if (isSelected) EmeraldGlow else Color.Black)
-                                                    .clickable { onReverbPresetChange(pair.second.toInt()) }
-                                                    .padding(vertical = 4.dp),
-                                                contentAlignment = Alignment.Center
+                                        val rows = presets.chunked(3)
+                                        rows.forEach { rowItems ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text(
-                                                    pair.first,
-                                                    color = if (isSelected) Color.Black else Color.White,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 9.sp
-                                                )
+                                                rowItems.forEach { pair ->
+                                                    val isSelected = reverbPreset == pair.second.toInt()
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(if (isSelected) EmeraldGlow else Color.Black)
+                                                            .clickable { onReverbPresetChange(pair.second.toInt()) }
+                                                            .padding(vertical = 6.dp),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            pair.first,
+                                                            color = if (isSelected) Color.Black else Color.White,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 10.sp
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -2578,11 +2905,25 @@ fun SongListItem(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Equalizer bar indicator when song is active
-            if (isActive) {
-                AnimatedEqualizerBars(isPlaying = isPlaying)
-                Spacer(modifier = Modifier.width(12.dp))
+            // Track Thumbnail (Active Equalizer overlays on top)
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(6.dp))
+            ) {
+                SongThumbnail(filePath = song.filePath, modifier = Modifier.fillMaxSize())
+                if (isActive) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AnimatedEqualizerBars(isPlaying = isPlaying)
+                    }
+                }
             }
+            Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
