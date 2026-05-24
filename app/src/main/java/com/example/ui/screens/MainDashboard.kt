@@ -172,15 +172,13 @@ fun MainDashboard(viewModel: MusicViewModel) {
         }
     }
 
-    // Auto-request or auto-scan on startup if permission is granted
+    // Auto-request on startup if permission is not granted
     LaunchedEffect(Unit) {
         val hasPermission = permissionsToRequest.all { perm ->
             androidx.core.content.ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
         }
         if (!hasPermission) {
             permissionLauncher.launch(permissionsToRequest)
-        } else {
-            viewModel.triggerManualScan()
         }
     }
 
@@ -831,7 +829,7 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 .heightIn(max = 180.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            itemsIndexed(excludedFolders.toList()) { _, folder ->
+                            itemsIndexed(excludedFolders.toList(), key = { _, folder -> folder }) { _, folder ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -931,7 +929,7 @@ fun MainDashboard(viewModel: MusicViewModel) {
                             )
                         }
                     } else {
-                        itemsIndexed(allPlaylists) { _, pl ->
+                        itemsIndexed(allPlaylists, key = { _, pl -> pl.id }) { _, pl ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1128,7 +1126,7 @@ fun MainDashboard(viewModel: MusicViewModel) {
                                 }
                             }
                         } else {
-                            itemsIndexed(filteredSongs) { _, song ->
+                            itemsIndexed(filteredSongs, key = { _, song -> song.id }) { _, song ->
                                 val isChecked = selectedSongIds.contains(song.id)
                                 Card(
                                     modifier = Modifier
@@ -1457,7 +1455,7 @@ fun SongsTab(
                     }
                 }
             } else {
-                itemsIndexed(filteredSongs) { _, song ->
+                itemsIndexed(filteredSongs, key = { _, song -> song.id }) { _, song ->
                     SongListItem(
                         song = song,
                         isActive = song.id == currentSong?.id,
@@ -1533,7 +1531,7 @@ fun PlaylistsTab(
                     }
                 }
             } else {
-                itemsIndexed(playlists) { _, pl ->
+                itemsIndexed(playlists, key = { _, pl -> pl.id }) { _, pl ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1703,7 +1701,7 @@ fun PlaylistSongsScreen(
                     }
                 }
             } else {
-                itemsIndexed(songs) { index, song ->
+                itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -2217,8 +2215,8 @@ fun ExpandedPlayerPanel(
 ) {
     var activePlayerTab by remember { mutableStateOf(0) } // 0: Player deck, 1: Live Skip Queue List
 
-    // Infinite transition for spinning CD disk graphic
-    val infiniteTransition = rememberInfiniteTransition()
+    // Infinite transition for spinning CD disk graphic and wave visualizer
+    val infiniteTransition = rememberInfiniteTransition(label = "shared_player_effects")
     val rotationAngle by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
@@ -2227,6 +2225,17 @@ fun ExpandedPlayerPanel(
             repeatMode = RepeatMode.Restart
         ),
         label = "CD rotate"
+    )
+
+    // A single wave phase animator used to drive all visualizer wave bars dynamically with zero lag!
+    val wavePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "Visualizer Wave Phase"
     )
 
     Surface(
@@ -2359,7 +2368,7 @@ fun ExpandedPlayerPanel(
                                 val barsCount = 28
                                 val modifierFactor = if (isPlaying) 1f else 0.08f
                                 for (i in 0 until barsCount) {
-                                    VisualizerWaveBar(index = i, modifierFactor = modifierFactor)
+                                    VisualizerWaveBar(index = i, modifierFactor = modifierFactor, phase = wavePhase)
                                 }
                             }
 
@@ -2703,7 +2712,7 @@ fun ExpandedPlayerPanel(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        itemsIndexed(playingQueue) { index, qSong ->
+                        itemsIndexed(playingQueue, key = { index, qSong -> "${qSong.id}_$index" }) { index, qSong ->
                             val isPlayingThis = index == queueIndex
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2894,19 +2903,12 @@ fun EqualizerBarItem(index: Int, multiplier: Float, isPlaying: Boolean) {
 }
 
 @Composable
-fun RowScope.VisualizerWaveBar(index: Int, modifierFactor: Float) {
-    val animHeight by rememberInfiniteTransition(label = "wave annotation $index").animateFloat(
-        initialValue = 8f,
-        targetValue = 24f + (kotlin.math.sin(index.toFloat() * 0.7f) * 16),
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = 400 + (index * 25), 
-                easing = FastOutSlowInEasing
-            ),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "wave animation float $index"
-    )
+fun RowScope.VisualizerWaveBar(index: Int, modifierFactor: Float, phase: Float) {
+    // Elegant mathematical wave height calculation based on a single outer phase value (drastically speeds up rendering!)
+    val baseValue = 24f + (kotlin.math.sin(index.toFloat() * 0.7f) * 16f)
+    val waveOffset = (phase * 2 * Math.PI.toFloat()) + (index * 0.45f)
+    val bounce = kotlin.math.abs(kotlin.math.sin(waveOffset))
+    val animHeight = 4f + baseValue * bounce
 
     Box(
         modifier = Modifier

@@ -82,21 +82,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 repository.preloadSampleSongs()
                 observeDatabaseRelations()
-                
-                // Allow our awesome neon theme loading animation to be displayed on first opening
-                delay(1800)
-                
-                // Perform quick auto scan on opening
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed preloading database songs on startup", e)
+            } finally {
+                _isLoadingData.value = false
+            }
+
+            // Perform auto scan silently in the background
+            try {
                 val countBefore = db.musicDao().getSongsCount()
                 val folders = _excludedFolders.value
                 repository.scanDeviceForSongs(folders)
                 val countAfter = db.musicDao().getSongsCount()
                 val newlyAdded = (countAfter - countBefore).coerceAtLeast(0)
-                _newSongsAddedCount.value = newlyAdded
+                if (newlyAdded > 0) {
+                    _newSongsAddedCount.value = newlyAdded
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed preloading database songs on startup", e)
-            } finally {
-                _isLoadingData.value = false
+                Log.e(TAG, "Startup background scan failed", e)
             }
         }
     }
